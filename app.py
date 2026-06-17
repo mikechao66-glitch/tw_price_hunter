@@ -18,6 +18,73 @@ import websocket_manager
 import snapshot_poller
 
 from monitors import opening_volume, limit_break, limit_pullback, tail_thin_lock, tail_reversal
+import random
+
+# ── 展示版模擬資料 ────────────────────────────────────────────────────────────
+
+# 模擬股票資料池
+_MOCK_STOCKS = [
+    {"symbol": "2330", "name": "台積電", "basePrice": 550},
+    {"symbol": "2454", "name": "聯發科", "basePrice": 850},
+    {"symbol": "3008", "name": "華立", "basePrice": 45},
+    {"symbol": "3037", "name": "欣興", "basePrice": 800},
+    {"symbol": "5483", "name": "中美晶", "basePrice": 180},
+    {"symbol": "6770", "name": "力積電", "basePrice": 70},
+    {"symbol": "2458", "name": "義隆", "basePrice": 150},
+    {"symbol": "2345", "name": "智邦", "basePrice": 2500},
+    {"symbol": "3450", "name": "聯鈞", "basePrice": 500},
+    {"symbol": "2327", "name": "國巨", "basePrice": 950},
+    {"symbol": "9910", "name": "豐泰", "basePrice": 70},
+    {"symbol": "6141", "name": "柏承", "basePrice": 35},
+    {"symbol": "2478", "name": "大毅", "basePrice": 200},
+    {"symbol": "3224", "name": "福貿", "basePrice": 180},
+    {"symbol": "3231", "name": "緯創", "basePrice": 65},
+]
+
+def _generate_mock_trigger():
+    """每次重新整理時生成新的模擬觸發訊息（每次刷新都產生，不額外節流）。"""
+    now = datetime.now()
+    stock = random.choice(_MOCK_STOCKS)
+    return {
+        "symbol": stock["symbol"],
+        "name": stock["name"],
+        "price": round(stock["basePrice"] * random.uniform(0.98, 1.05), 2),
+        "changePercent": round(random.uniform(-10, 10), 2),
+        "triggerTime": now.strftime("%H:%M:%S"),
+    }
+
+def _add_mock_triggers():
+    """在展示版中定期添加模擬觸發訊息。"""
+    new_trigger = _generate_mock_trigger()
+    if new_trigger:
+        with state.lock:
+            # 隨機添加到某個監控清單
+            choice = random.randint(0, 4)
+            if choice == 0 and len(state.triggered_opening_volume) < 20:
+                state.triggered_opening_volume.insert(0, {
+                    **new_trigger,
+                    "tradeVolume": random.randint(100, 5000),
+                    "yesterdayVolume": random.randint(50, 2000),
+                })
+            elif choice == 1 and len(state.triggered_limit_break) < 20:
+                state.triggered_limit_break.insert(0, {
+                    **new_trigger,
+                    "triggerCondition": random.choice(["出量", "掛單量突然減少"]),
+                    "isAlert": False,
+                })
+            elif choice == 2 and len(state.triggered_limit_pullback) < 20:
+                state.triggered_limit_pullback.insert(0, new_trigger)
+            elif choice == 3 and len(state.triggered_tail_thin_lock) < 20:
+                state.triggered_tail_thin_lock.insert(0, {
+                    **new_trigger,
+                    "bidSize": random.randint(10, 500),
+                    "tradeVolume": random.randint(1000, 20000),
+                })
+            elif choice == 4 and len(state.triggered_tail_reversal) < 20:
+                state.triggered_tail_reversal.insert(0, new_trigger)
+
+            # 每筆觸發後保存狀態
+            state.save_persist()
 
 # ── 頁面設定 ──────────────────────────────────────────────────────────────────
 
@@ -159,37 +226,39 @@ with st.sidebar:
 
 # ── 標題與狀態列 ──────────────────────────────────────────────────────────────
 
-# 展示版標誌
-if config.DEMO_MODE:
-    st.warning("🎬 **展示版** — 本應用為雲端展示版本，所有數據均為模擬示意，不涉及實際交易。")
-
-st.title("📈 台股價量獵人")
+st.markdown(
+    "<h1>📈 台股價量獵人 "
+    "<span style='font-size:0.45em; font-weight:400; color:#999;'>"
+    "🎬 展示版—所有數據均為模擬示意</span></h1>",
+    unsafe_allow_html=True,
+)
 
 init_err = st.session_state.get("init_error", "")
 if init_err:
     st.error(init_err)
     st.stop()
 
+# 狀態列（展示版也顯示模擬的訂閱數和配額）
+col1, col2, col3 = st.columns(3)
+
 if config.DEMO_MODE:
-    # 展示版簡化狀態列
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("狀態", "模擬運行中 ✓")
-    with col2:
-        start_time = st.session_state.get("start_time", "--")
-        st.metric("啟動時間", start_time)
+    # 展示版：模擬數字跳動
+    demo_ws_count = st.session_state.get("demo_ws_count", random.randint(50, 150))
+    demo_api_quota = st.session_state.get("demo_api_quota", random.randint(100, 400))
+    st.session_state["demo_ws_count"] = demo_ws_count
+    st.session_state["demo_api_quota"] = demo_api_quota
 else:
-    # 生產版本完整狀態列
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        ws_count = state.ws_subscription_count
-        st.metric("WebSocket 訂閱數", f"{ws_count} / 300")
-    with col2:
-        quota = state.api_quota_used
-        st.metric("API 配額（本分鐘）", f"{quota} / 600")
-    with col3:
-        start_time = st.session_state.get("start_time", "--")
-        st.metric("啟動時間", start_time)
+    # 生產版本：真實數字
+    demo_ws_count = state.ws_subscription_count
+    demo_api_quota = state.api_quota_used
+
+with col1:
+    st.metric("WebSocket 訂閱數", f"{demo_ws_count} / 300")
+with col2:
+    st.metric("API 配額（本分鐘）", f"{demo_api_quota} / 600")
+with col3:
+    start_time = st.session_state.get("start_time", "--")
+    st.metric("啟動時間", start_time)
 
 # ── 錯誤日誌 ──────────────────────────────────────────────────────────────────
 
@@ -355,17 +424,25 @@ st.markdown("<div style='text-align: center; color: #888; font-size: 14px; margi
 
 # ── 收盤後停止所有監控並停止自動刷新 ─────────────────────────────────────────
 
-_hm = datetime.now().strftime("%H%M")
-_after_market = _hm >= "1330" or _hm < "0830"
-
-if _after_market:
-    if not st.session_state.get("modules_stopped", False):
-        limit_pullback.stop()
-        tail_thin_lock.stop()
-        snapshot_poller.stop()
-        st.session_state["modules_stopped"] = True
-    st.info("收盤時段，監控已暫停。觸發記錄保留至明日開盤前。")
-else:
-    st.session_state["modules_stopped"] = False
+if config.DEMO_MODE:
+    # 展示版：不受收盤時間限制，持續產生模擬資料並刷新頁面
+    _add_mock_triggers()
+    st.session_state["demo_ws_count"] = random.randint(50, 150)
+    st.session_state["demo_api_quota"] = random.randint(100, 400)
     time.sleep(5)
     st.rerun()
+else:
+    _hm = datetime.now().strftime("%H%M")
+    _after_market = _hm >= "1330" or _hm < "0830"
+
+    if _after_market:
+        if not st.session_state.get("modules_stopped", False):
+            limit_pullback.stop()
+            tail_thin_lock.stop()
+            snapshot_poller.stop()
+            st.session_state["modules_stopped"] = True
+        st.info("收盤時段，監控已暫停。觸發記錄保留至明日開盤前。")
+    else:
+        st.session_state["modules_stopped"] = False
+        time.sleep(5)
+        st.rerun()
