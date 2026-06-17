@@ -1,0 +1,7 @@
+streamlit>=1.40.0
+requests>=2.31.0
+pandas>=2.0.0
+
+# 生產版本可選（展示版不需要）
+# taishin_sdk  # 本地開發或生產版本時取消註解
+# python-dotenv>=1.0.0  # 環保變數支援（未來使用）
